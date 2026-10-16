@@ -2575,7 +2575,8 @@ class FrontendConfig:
         type: Frontend type - "dynamo" (default); "sglang-router" (SGLang Model
             Gateway), "vllm-router", "smg" (Shepherd Model Gateway, any backend), "llm-d"
             (llm-d Endpoint Picker behind Envoy, vLLM), "atomesh", and
-            "tilert-router" (static routers); "sglang", "vllm", and
+            "tilert-router" (static routers); "infera" (Infera router over ATOM
+            workers that register in etcd); "sglang", "vllm", and
             "trtllm_serve" (direct: the single aggregate worker binds the public
             port, no router process); "none" (services-only job: no router, no
             OpenAI endpoint, no worker-count health gate; requires no engine

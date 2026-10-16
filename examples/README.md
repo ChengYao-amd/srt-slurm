@@ -115,3 +115,6 @@ for image and weight requirements.
 [`atom/atomesh-disagg.yaml`](atom/atomesh-disagg.yaml) launches native ATOM prefill
 and decode workers with the AToMesh router. Each logical worker fits on one node;
 the cluster configuration selects ROCm device visibility.
+
+[`atom/infera-1node-pd.yaml`](atom/infera-1node-pd.yaml) runs a TP1 x PP4 prefill and a
+TP1 decode of Qwen3-30B-A3B on one node behind the [Infera router](../docs/infera.md).

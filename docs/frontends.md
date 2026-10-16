@@ -1,6 +1,6 @@
 # Frontends and Dynamo
 
-The `frontend:` block (which router fronts the workers) and the `dynamo:` block (how Dynamo is installed and wired). Router-specific pages: [SGLang Router](sglang-router.md), [vLLM Router](vllm-router.md), [Shepherd Model Gateway](smg.md), [llm-d Router](llm-d.md).
+The `frontend:` block (which router fronts the workers) and the `dynamo:` block (how Dynamo is installed and wired). Router-specific pages: [SGLang Router](sglang-router.md), [vLLM Router](vllm-router.md), [Shepherd Model Gateway](smg.md), [llm-d Router](llm-d.md), [Infera Router](infera.md).
 
 ## frontend
 

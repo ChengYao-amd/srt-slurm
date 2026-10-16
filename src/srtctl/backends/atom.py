@@ -23,6 +23,11 @@ if TYPE_CHECKING:
     from srtctl.core.schema import ProfilingConfig
     from srtctl.core.topology import Endpoint, NodePortAllocator, Process
 
+# ATOM arguments srtctl derives from the allocation; a role cannot set them.
+MANAGED_ARGS = frozenset({"model", "host", "server-port", "tp", "tensor-parallel-size", "kv-transfer-config"})
+# ATOM sizes that multiply with -tp into the GPUs one server occupies.
+_WORLD_SIZE_ARGS = frozenset({"pipeline-parallel-size", "prefill-context-parallel-size", "data-parallel-size"})
+
 
 @dataclass(frozen=True)
 class AtomBackend(Backend):
@@ -90,9 +95,17 @@ class AtomBackend(Backend):
         return endpoints_to_processes(endpoints, base_sys_port=base_sys_port, port_allocator=port_allocator)
 
     def _kv_transfer_config(
-        self, process: Process, worker_ip: str, extra_connectors: list[dict[str, Any]]
+        self,
+        process: Process,
+        worker_ip: str,
+        extra_connectors: list[dict[str, Any]],
+        mooncake_config: dict[str, Any],
     ) -> str | None:
-        """Mooncake for P/D workers plus the role's extra connectors; several are wrapped in ``multi``."""
+        """Mooncake for P/D workers plus the role's extra connectors; several are wrapped in ``multi``.
+
+        ``mooncake_config`` (the role's ``mooncake-connector-config``) adds ATOM connector
+        keys such as ``num_worker_threads`` to the Mooncake entry; srtctl's own keys stay its.
+        """
         connectors = []
         for connector in extra_connectors:
             if connector.get("kv_connector") == "lmcache_mp":
@@ -111,7 +124,14 @@ class AtomBackend(Backend):
             }
             if self.mooncake_protocol is not None:
                 mooncake["protocol"] = self.mooncake_protocol
-            connectors.insert(0, mooncake)
+            if not isinstance(mooncake_config, dict):
+                raise ValueError("mooncake-connector-config must be a mapping of ATOM Mooncake connector keys")
+            overlap = sorted(mooncake.keys() & mooncake_config.keys())
+            if overlap:
+                raise ValueError(f"mooncake-connector-config cannot override srtctl-managed key(s): {overlap}")
+            connectors.insert(0, {**mooncake, **mooncake_config})
+        elif mooncake_config:
+            raise ValueError("mooncake-connector-config applies to prefill and decode roles only")
         if not connectors:
             return None
         payload = connectors[0] if len(connectors) == 1 else {"kv_connector": "multi", "connectors": connectors}
@@ -127,8 +147,11 @@ class AtomBackend(Backend):
         dump_config_path: Path | None = None,
         profiling: ProfilingConfig | None = None,
     ) -> list[str]:
-        if frontend_type != "atomesh":
-            raise ValueError(f"backend.type: atom requires frontend.type: atomesh (got {frontend_type!r})")
+        from srtctl.frontends import get_frontend
+
+        frontend = get_frontend(frontend_type)
+        if frontend.required_backend != self.type:
+            raise ValueError(f"backend.type: atom requires an ATOM frontend such as atomesh (got {frontend_type!r})")
         if len({item.node for item in endpoint_processes}) != 1:
             raise ValueError("ATOM currently requires each logical endpoint to fit on one Slurm node")
 
@@ -137,17 +160,17 @@ class AtomBackend(Backend):
         worker_ip = get_hostname_ip(process.node, runtime.network_interface)
         config = self.get_config_for_mode(process.endpoint_mode)
         extra_connectors = config.pop("extra-kv-connectors", [])
-        reserved = {"model", "host", "server-port", "tp", "tensor-parallel-size", "kv-transfer-config"}
-        overlap = reserved.intersection(_canonical_arg_key(key) for key in config)
+        mooncake_config = config.pop("mooncake-connector-config", {})
+        overlap = MANAGED_ARGS.intersection(_canonical_arg_key(key) for key in config)
         if overlap:
             raise ValueError(f"ATOM config cannot override srtctl-managed argument(s): {sorted(overlap)}")
 
         command = ["env", f"ATOM_HOST_IP={worker_ip}", *(nsys_prefix or [])]
         command.extend(
+            frontend.worker_entrypoint(process, runtime) or ["python3", "-m", "atom.entrypoints.openai_server"]
+        )
+        command.extend(
             [
-                "python3",
-                "-m",
-                "atom.entrypoints.openai_server",
                 "--model",
                 runtime.worker_model_arg,
                 "--host",
@@ -155,10 +178,10 @@ class AtomBackend(Backend):
                 "--server-port",
                 str(process.http_port),
                 "-tp",
-                str(len(process.gpu_indices)),
+                str(_tensor_parallel_size(config, len(process.gpu_indices))),
             ]
         )
-        kv_transfer_config = self._kv_transfer_config(process, worker_ip, extra_connectors)
+        kv_transfer_config = self._kv_transfer_config(process, worker_ip, extra_connectors, mooncake_config)
         if kv_transfer_config is not None:
             command.extend(["--kv-transfer-config", kv_transfer_config])
         command.extend(_config_to_cli_args(config))
@@ -183,3 +206,21 @@ def _config_to_cli_args(config: dict[str, Any]) -> list[str]:
 
 def _canonical_arg_key(key: str) -> str:
     return key.lstrip("-").replace("_", "-")
+
+
+def _tensor_parallel_size(config: dict[str, Any], gpus: int) -> int:
+    """The -tp that fills the worker's GPUs once the role's other parallel sizes are taken out.
+
+    ATOM runs dp x pp engines of tp x pcp GPUs each. Decode context parallelism
+    reuses the TP GPUs and DP-attention turns -tp into DP ranks, so neither enters.
+    """
+    others = 1
+    for key, value in config.items():
+        name = _canonical_arg_key(key)
+        if name in _WORLD_SIZE_ARGS:
+            others *= int(value)
+        elif any(arg.startswith(name) for arg in _WORLD_SIZE_ARGS):
+            raise ValueError(f"ATOM config key {key!r} abbreviates a parallel size; spell it out")
+    if others < 1 or gpus % others:
+        raise ValueError(f"ATOM worker has {gpus} GPU(s), not a multiple of its pp x pcp x dp = {others}")
+    return gpus // others

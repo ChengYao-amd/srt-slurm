@@ -108,6 +108,10 @@ class DynamoFrontend(DynamicFrontend):
     # dynamo.<engine> workers register over the request plane; they bind no OpenAI port.
     worker_launch: ClassVar[Literal["dynamo", "direct"]] = "dynamo"
 
+    def worker_metrics_path(self, backend: Any, mode: "WorkerMode") -> str | None:
+        """Every rank's Dynamo system server answers ``/metrics``, whatever the engine."""
+        return self.metrics_path
+
     def worker_metrics_port(self, process: "Process", runtime: "RuntimeContext") -> int | None:
         """Every rank runs the Dynamo system status server (health, metrics) on its system port."""
         return process.sys_port if process.sys_port > 0 else None

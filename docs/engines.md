@@ -303,6 +303,43 @@ srt-slurm owns the model path, HTTP port, tensor parallel size, and KV-transfer
 contract, so recipes cannot override those arguments. See the complete
 [ATOM/AToMesh recipe](https://github.com/NVIDIA/srt-slurm/blob/main/examples/atom/atomesh-disagg.yaml).
 
+srtctl sets `-tp` to the worker's GPUs divided by `pipeline-parallel-size` x
+`prefill-context-parallel-size` x `data-parallel-size` from the role args (each
+defaults to 1). ATOM runs dp x pp engines of tp x pcp GPUs each
+([`engine_core_mgr.py`](https://github.com/ROCm/ATOM/blob/661ef7661eef0d804d2b52d81ed41d80aeaf9fdb/atom/model_engine/engine_core_mgr.py#L349-L371),
+[`model_runner.py`](https://github.com/ROCm/ATOM/blob/661ef7661eef0d804d2b52d81ed41d80aeaf9fdb/atom/model_engine/model_runner.py#L996)).
+`decode-context-parallel-size` reuses the TP GPUs and `enable-dp-attention` turns
+the TP ranks into DP ranks, so neither changes `-tp`. A TP1 x PP4 prefill is
+`gpus: 4` with `pipeline-parallel-size: 4`. A size that does not divide the
+worker's GPUs fails when srtctl builds the worker command, and so does an
+abbreviation of one of the three keys (such as `pipeline-parallel`), which ATOM
+would accept but `-tp` would not count. Pipeline parallelism needs a model whose
+ATOM implementation splits its layers by stage, and decode context parallelism
+needs an MLA model. A prefill and decode with different `-tp` also need an MLA
+model: ATOM's Mooncake connector copies whole per-rank KV blocks and rejects a
+block-size mismatch
+([`mooncake_connector.py`](https://github.com/ROCm/ATOM/blob/661ef7661eef0d804d2b52d81ed41d80aeaf9fdb/atom/kv_transfer/disaggregation/mooncake/mooncake_connector.py#L2325-L2330)).
+
+`mooncake-connector-config` in a prefill or decode role's args adds ATOM Mooncake
+connector keys, such as the producer's `num_worker_threads`, to the Mooncake entry
+srtctl generates. It cannot override the keys srtctl sets (`kv_role`,
+`kv_connector`, `proxy_ip`, `handshake_port`, `protocol`) and is rejected on an
+aggregate role.
+
+```yaml
+roles:
+  prefill:
+    gpus: 4
+    args:
+      pipeline-parallel-size: 4
+      mooncake-connector-config:
+        num_worker_threads: 4
+```
+
+`frontend.type: infera` puts the [Infera router](infera.md) in front of the same
+ATOM servers: each worker runs under `python3 -m infera.engine.atom` and registers
+in etcd instead of being passed to the router.
+
 To run another KV connector next to the Mooncake one (for example ATOM's in-process
 LMCache CPU offload on prefill), list it under `extra-kv-connectors` in that role's
 args. srtctl keeps generating the Mooncake entry, with its handshake port, and wraps

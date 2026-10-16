@@ -8,37 +8,31 @@ A static router is launched with its worker URLs on the command line; a
 dynamic frontend is launched with no worker list, workers announce
 themselves over a discovery plane (Dynamo: etcd and NATS), and readiness is
 the frontend's own registration count checked against the allocated
-topology. Consequences shared by every such frontend live here: it fronts
-any engine, it needs no per-worker URL gate before traffic, and no worker is
-itself the public endpoint.
+topology. Consequences shared by every such frontend live here: it needs no
+per-worker URL gate before traffic, and no worker is itself the public
+endpoint.
 
 A router binary that can also take static URLs (vLLM Router's ZMQ discovery
 mode) is a mode of a static router, not a dynamic frontend.
 
-Dynamo is the only implementation today. A subclass sets ``type`` and
-``worker_launch``, registers with ``@register_frontend``, parses its own
-registration count in ``parse_health``, decides which rank serves which port,
-and launches the process in ``start_frontends``.
+Dynamo and Infera implement it. A subclass sets ``type`` (and
+``worker_launch`` when its workers are not the engine's own server), registers
+with ``@register_frontend``, parses its own registration count in
+``parse_health``, decides which rank serves which port, and launches the
+process in ``start_frontends``.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from srtctl.core.health import WorkerHealthResult, probe_json_health
 from srtctl.frontends.base import Frontend, frontend_args_to_cli
 
-if TYPE_CHECKING:
-    from srtctl.backends.base import WorkerMode
-
 
 class DynamicFrontend(Frontend):
     """Base class for frontends that discover their workers through registration."""
-
-    def worker_metrics_path(self, backend: Any, mode: WorkerMode) -> str | None:
-        """Every rank's Dynamo system server answers ``/metrics``, whatever the engine."""
-        return self.metrics_path
 
     @property
     def health_endpoint(self) -> str:

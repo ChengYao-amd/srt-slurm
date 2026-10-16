@@ -132,7 +132,6 @@ RULES = [
         "get_frontend(config.frontend.type) instead of comparing the name outside src/srtctl/frontends/.",
         frozenset(
             {
-                ("backends/atom.py", "frontend.type vs 'atomesh'"),
                 ("benchmarks/router.py", "frontend.type vs 'sglang-router'"),
                 ("cli/mixins/benchmark_stage.py", "frontend.type vs 'sglang-router'"),
                 ("cli/mixins/frontend_stage.py", "frontend.type vs 'dynamo'"),

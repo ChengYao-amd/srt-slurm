@@ -39,7 +39,7 @@ class Frontend(ABC):
     1. Which backend it pairs with and what its recipe rules are
        (``required_backend``, ``validate``)
     2. How its workers are launched and which port each binds
-       (``worker_launch``, ``worker_api_port``, ``expands_node_local_dp``)
+       (``worker_launch``, ``worker_entrypoint``, ``worker_api_port``, ``expands_node_local_dp``)
     3. Which rank serves metrics, an endpoint, or profiler control, and where
        (``worker_metrics_port``, ``worker_endpoint_port``, ``profiling_control_port``,
        ``direct_endpoint_nodes``, ``worker_ready_port``, ``metrics_path``)
@@ -81,6 +81,17 @@ class Frontend(ABC):
     def type(self) -> str:
         """Frontend type identifier (e.g., 'dynamo', 'sglang')."""
         raise NotImplementedError
+
+    def worker_entrypoint(self, process: "Process", runtime: "RuntimeContext") -> list[str] | None:
+        """Argv that starts a direct worker in place of the engine's own server module, or ``None`` for that module.
+
+        A frontend whose workers register themselves through a wrapper around the
+        engine's server (Infera's ``python3 -m infera.engine.atom``) returns the
+        wrapper with its registration flags; the backend appends the server's own
+        arguments, which the wrapper forwards. ``worker_launch`` stays ``direct``:
+        the worker is still the engine's own server on its allocated port.
+        """
+        return None
 
     @abstractmethod
     def worker_api_port(self, mode: str) -> Literal["public", "allocated"]:

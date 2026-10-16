@@ -26,7 +26,7 @@ Rules for `src/srtctl/backends/`. Every consumer asks a backend through `Backend
 5. Add polymorphic deserialization in `BackendConfigField` in `schema.py`
 
 **Current backends:**
-- **ATOM**: Native ROCm servers behind AToMesh, with one Slurm node per logical worker and allocator-owned Mooncake handshake ports
+- **ATOM**: Native ROCm servers behind AToMesh or Infera (the frontend's `worker_entrypoint` wraps the server module), with one Slurm node per logical worker and allocator-owned Mooncake handshake ports
 - **SGLang**: Per-process srun launching, supports prefill/decode/aggregated modes
 - **TileRT**: Decode workers behind `tilert-router`, paired with an explicit prefill engine and image.
 - **TokenSpeed**: `dynamo.tokenspeed` workers behind the Dynamo frontend, or the gRPC engine `smg_grpc_servicer.tokenspeed` behind SMG (`is_grpc_mode` is always true), aggregated or prefill/decode; allocator-owned `--port` scan base and a dist-init block sized for its control-plane cluster

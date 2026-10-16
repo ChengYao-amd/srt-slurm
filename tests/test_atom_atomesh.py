@@ -66,10 +66,10 @@ def test_atomesh_frontend_requires_atom_backend() -> None:
         _load(data)
 
 
-def test_atom_worker_requires_atomesh_frontend() -> None:
+def test_atom_worker_requires_a_frontend_paired_with_atom() -> None:
     process = Process("node0", frozenset(range(8)), 7500, 6100, "agg", 0)
 
-    with pytest.raises(ValueError, match="requires frontend.type: atomesh"):
+    with pytest.raises(ValueError, match="requires an ATOM frontend"):
         AtomBackend().build_worker_command(process, [process], _runtime(), frontend_type="dynamo")
 
 
@@ -261,6 +261,78 @@ def test_atom_lmcache_mp_defaults_to_the_lmcache_server_port(extra_config: dict,
     command = _build(backend, process)
 
     assert json.loads(command[command.index("--kv-transfer-config") + 1])["kv_connector_extra_config"] == expected
+
+
+@pytest.mark.parametrize(
+    ("gpus", "args", "tp"),
+    [
+        (8, {"data-parallel-size": 1, "enable-dp-attention": True}, "8"),
+        (8, {"decode-context-parallel-size": 8}, "8"),
+        (4, {"pipeline-parallel-size": 4}, "1"),
+        (8, {"pipeline_parallel_size": 2}, "4"),
+        (8, {"prefill-context-parallel-size": 2}, "4"),
+        (8, {"data-parallel-size": 2}, "4"),
+    ],
+)
+def test_atom_tensor_parallel_size_is_what_the_other_parallel_sizes_leave(gpus: int, args: dict, tp: str) -> None:
+    """ATOM runs dp x pp engines of tp x pcp GPUs; DCP and DP-attention reuse the TP GPUs."""
+    backend = AtomBackend(roles={"agg": RoleConfig(args=args)})
+    process = Process("node0", frozenset(range(gpus)), 7500, 6100, "agg", 0)
+
+    command = _build(backend, process)
+
+    assert command[command.index("-tp") + 1] == tp
+
+
+def test_atom_rejects_parallel_sizes_that_do_not_divide_the_worker_gpus() -> None:
+    backend = AtomBackend(roles={"agg": RoleConfig(args={"pipeline-parallel-size": 3})})
+    process = Process("node0", frozenset(range(4)), 7500, 6100, "agg", 0)
+
+    with pytest.raises(ValueError, match=r"4 GPU\(s\), not a multiple of its pp x pcp x dp = 3"):
+        _build(backend, process)
+
+
+def test_atom_rejects_an_abbreviated_parallel_size() -> None:
+    backend = AtomBackend(roles={"agg": RoleConfig(args={"pipeline-parallel": 4})})
+    process = Process("node0", frozenset(range(4)), 7500, 6100, "agg", 0)
+
+    with pytest.raises(ValueError, match="'pipeline-parallel' abbreviates a parallel size"):
+        _build(backend, process)
+
+
+def test_atom_mooncake_connector_config_joins_the_mooncake_entry() -> None:
+    """The role's Mooncake keys reach ATOM inside srtctl's connector, not as a CLI flag."""
+    config = {"mooncake-connector-config": {"num_worker_threads": 4}}
+    backend = AtomBackend(roles={"decode": RoleConfig(args=config)})
+    process = Process("node0", frozenset(range(4)), 7500, 6100, "decode", 0, nixl_port=6301)
+
+    command = _build(backend, process)
+
+    assert json.loads(command[command.index("--kv-transfer-config") + 1]) == {
+        "kv_role": "kv_consumer",
+        "kv_connector": "mooncake",
+        "proxy_ip": WORKER_IP,
+        "handshake_port": 6301,
+        "num_worker_threads": 4,
+    }
+    assert "--mooncake-connector-config" not in command
+
+
+@pytest.mark.parametrize(
+    ("mode", "config", "message"),
+    [
+        ("prefill", {"handshake_port": 1}, r"cannot override srtctl-managed key\(s\): \['handshake_port'\]"),
+        ("agg", {"num_worker_threads": 4}, "applies to prefill and decode roles only"),
+    ],
+)
+def test_atom_mooncake_connector_config_rejects_managed_keys_and_aggregate_roles(
+    mode: str, config: dict, message: str
+) -> None:
+    backend = AtomBackend(roles={mode: RoleConfig(args={"mooncake-connector-config": config})})
+    process = Process("node0", frozenset(range(4)), 7500, 6100, mode, 0, nixl_port=6301)
+
+    with pytest.raises(ValueError, match=message):
+        _build(backend, process)
 
 
 def test_atom_rejects_cross_node_model_parallel_endpoint() -> None:

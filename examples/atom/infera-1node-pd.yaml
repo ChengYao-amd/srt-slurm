@@ -1,0 +1,51 @@
+# ATOM prefill (TP1 x PP4, GPUs 0-3) and decode (TP1, GPU 4) on one node behind Infera.
+# PP needs a model whose ATOM implementation splits layers by stage (qwen3_moe does, dense qwen3 does not).
+# Workers run under `python3 -m infera.engine.atom` and register in etcd; the router discovers them.
+# Configure visible_devices_env: ROCR_VISIBLE_DEVICES in the cluster srtslurm.yaml.
+# The container must include ATOM and Infera (infera.engine.atom, infera.server).
+schema: 2
+name: qwen3-30b-a3b-infera-1node-pd
+model:
+  path: hf:Qwen/Qwen3-30B-A3B
+  container: infera-atom:latest       # ATOM v0.1.6 or newer (PP prefill with Mooncake) plus Infera
+  precision: bf16
+resources:
+  gpu_type: mi355x
+  gpus_per_node: 8
+engine:
+  type: atom
+  mooncake_protocol: rdma
+frontend:
+  type: infera
+  enable_multiple_frontends: false
+  args:
+    router-backend: python
+    router-policy: round-robin
+    kv-event-transport: zmq
+    session-affinity: prefill
+roles:
+  prefill:
+    nodes: 1
+    workers: 1
+    gpus: 4
+    env:
+      # P and D see disjoint GPUs on one host: move KV over the RDMA rails.
+      MC_DISABLE_HIP: "1"
+    args:
+      pipeline-parallel-size: 4
+      enforce-eager: true
+      # Mooncake send workers per PP stage (ATOM's num_worker_threads, default 16).
+      mooncake-connector-config:
+        num_worker_threads: 4
+  decode:
+    nodes: colocate
+    workers: 1
+    # Qwen3-30B-A3B is GQA: Mooncake needs the same KV heads per rank, so decode TP matches prefill TP.
+    gpus: 1
+    env:
+      MC_DISABLE_HIP: "1"
+benchmark:
+  type: sa-bench
+  isl: 128
+  osl: 128
+  concurrencies: "4x8"
